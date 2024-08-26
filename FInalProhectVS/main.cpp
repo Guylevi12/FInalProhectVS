@@ -3,24 +3,29 @@
 
 #include <iostream>
 #include <string>
+
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
+#include <thread_safe_queue.h>
+
 #include <queue>
 #include <map>
-#include <atomic>
 #include <set>
+
 #include <fstream>
 #include <filesystem>
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h> 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <stb_image.h>
+
 #include <json.hpp>
 #include <httplib.h>
-#include <thread_safe_queue.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
@@ -58,35 +63,81 @@ struct ImageData {
     GLuint texture_id = 0;
 };
 
-// Global variables of the pro
+// Global variables of the project:
+
+// threads
 std::mutex mtx;
 std::condition_variable cv;
-std::queue<std::string> image_queue;
+ThreadSafeQueue<Movie> movie_queue;
 std::atomic<bool> image_thread_running(true);
+std::atomic<bool> search_in_progress(false);
+std::atomic<bool> fetch_in_progress(false);
+
+// movie
+std::queue<std::string> image_queue;
 std::map<std::string, ImageData> textureMap;
+std::string image_url;
+
 std::vector<Movie> watch_list;
 std::set<std::string> watch_list_titles;
+bool movie_not_found = false;
+Movie selected_movie;
+int selected_movie_index = -1;
+std::vector<Movie> movie_list;
+bool show_not_in_list_message = false;
+
+// user and window 
 GLFWwindow* window;
 std::string current_user;
 bool first_run = true;
 char title_input[256] = "";
 char year_input[5] = "";
-bool movie_not_found = false;
 bool connection_error = false;
-Movie selected_movie;
-std::string image_url;
-int selected_movie_index = -1;
-std::vector<Movie> movie_list;
-std::atomic<bool> search_in_progress(false);
-ThreadSafeQueue<Movie> movie_queue;
-bool show_not_in_list_message = false;
-std::atomic<bool> fetch_in_progress(false);
-std::thread fetch_thread;
 std::string api_key;
 
 
 // Movie
-bool FetchMovieInfo(Movie& movie) {
+void FetchMovieList(const std::string& title, const std::string& year) {
+    std::string encoded_title = httplib::detail::encode_url(title);
+    std::string url = "/?s=" + encoded_title + "&type=movie&apikey=" + api_key;
+
+    httplib::Client cli("https://www.omdbapi.com");
+    auto res = cli.Get(url);
+
+    if (!res) {
+        connection_error = true;
+        movie_queue.setFinished();
+        return;
+    }
+
+    if (res->status == 200) {
+        json response = json::parse(res->body);
+        if (response["Response"] == "True" && response.contains("Search")) {
+            for (const auto& item : response["Search"]) {
+                Movie movie;
+                movie.title = item.value("Title", "Unknown");
+                movie.release_year = item.value("Year", "Unknown");
+                movie.poster_url = item.value("Poster", "");
+
+                // Apply year filter here if specified
+                if (year.empty() || movie.release_year.find(year) != std::string::npos) {
+                    movie_queue.push(movie);
+                }
+            }
+            connection_error = false;
+        }
+        else {
+            // No movies found or error in response
+            connection_error = false; // It's not a connection error, just no results
+        }
+    }
+    else {
+        connection_error = true;
+    }
+
+    movie_queue.setFinished();
+}
+bool FetchMovieInfo(Movie& movie) { // info of a spesific movie 
     std::string encoded_title = httplib::detail::encode_url(movie.title);
     std::string url = "/?t=" + encoded_title + "&y=" + movie.release_year + "&apikey=" + api_key;
 
@@ -142,46 +193,6 @@ bool FetchMovieInfo(Movie& movie) {
     }
     connection_error = false;
     return false;
-}
-void FetchMovieList(const std::string& title, const std::string& year) {
-    std::string encoded_title = httplib::detail::encode_url(title);
-    std::string url = "/?s=" + encoded_title + "&type=movie&apikey=" + api_key;
-
-    httplib::Client cli("https://www.omdbapi.com");
-    auto res = cli.Get(url);
-
-    if (!res) {
-        connection_error = true;
-        movie_queue.setFinished();
-        return;
-    }
-
-    if (res->status == 200) {
-        json response = json::parse(res->body);
-        if (response["Response"] == "True" && response.contains("Search")) {
-            for (const auto& item : response["Search"]) {
-                Movie movie;
-                movie.title = item.value("Title", "Unknown");
-                movie.release_year = item.value("Year", "Unknown");
-                movie.poster_url = item.value("Poster", "");
-
-                // Apply year filter here if specified
-                if (year.empty() || movie.release_year.find(year) != std::string::npos) {
-                    movie_queue.push(movie);
-                }
-            }
-            connection_error = false;
-        }
-        else {
-            // No movies found or error in response
-            connection_error = false; // It's not a connection error, just no results
-        }
-    }
-    else {
-        connection_error = true;
-    }
-
-    movie_queue.setFinished();
 }
 void FetchMovieDetails(int index) {
     Movie temp_movie = movie_list[index];
@@ -511,7 +522,8 @@ int main() {
     std::thread image_thread(ImageLoadingThread);
 
     // Variables for ImGui input
-    std::thread fetcher_thread;
+    std::thread fetch_thread;// for single movie details
+    std::thread fetcher_thread;// for movie list 
     std::string message;
 
     while (!glfwWindowShouldClose(window)) {
@@ -937,7 +949,6 @@ int main() {
 
         // Rendering
         ImGui::Render();
-        //        int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(0.45f, 0.55f, 0.60f, 1.00f);
@@ -958,7 +969,6 @@ int main() {
     if (image_thread.joinable()) {
         image_thread.join();
     }
-
     if (fetcher_thread.joinable()) {
         fetcher_thread.join();
     }
