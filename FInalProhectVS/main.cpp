@@ -29,10 +29,6 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-std::string GetExecutablePath() {//NEEDS TO BE AT THE TOP OF HERE DON'T MOVE ME
-    return std::filesystem::current_path().string();
-}
-
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
@@ -42,7 +38,8 @@ using json = nlohmann::json;
 #define USER_DIRECTORY "./users/"
 #define FONT_SIZE 24.0f
 
-typedef struct Movie {
+struct Movie {
+    std::string id;
     std::string title;
     std::string producer;
     std::string release_year;
@@ -53,8 +50,7 @@ typedef struct Movie {
     GLuint texture_id = 0;
     std::string rating;
     std::string votes;
-} Movie;
-
+};
 struct ImageData {
     unsigned char* data = nullptr;
     int width = 0;
@@ -85,6 +81,12 @@ Movie selected_movie;
 int selected_movie_index = -1;
 std::vector<Movie> movie_list;
 bool show_not_in_list_message = false;
+enum class SelectedList { None, SearchResults, WatchList };
+SelectedList current_selected_list = SelectedList::None;
+bool sort_watch_list_by_year = false;
+bool sort_watch_list_ascending = true;
+bool sort_movie_list_by_year = false;
+bool sort_movie_list_ascending = true;
 
 // user and window 
 GLFWwindow* window;
@@ -95,6 +97,56 @@ char year_input[5] = "";
 bool connection_error = false;
 std::string api_key;
 
+// Functions:
+
+// General
+std::string GetExecutablePath() {
+    return fs::current_path().string();
+}
+int FilterNumericInput(ImGuiInputTextCallbackData* data)
+{
+    if (data->EventChar < '0' || data->EventChar > '9')
+        return 1;
+    return 0;
+}
+void LoadFonts(ImGuiIO& io) {
+    std::string exePath = GetExecutablePath();
+    std::string regularFontPath = exePath + "/" + REGULAR_FONT;
+    std::string specialFontPath = exePath + "/" + SPECIAL_FONT;
+
+    ImFont* regularFont = io.Fonts->AddFontFromFileTTF(regularFontPath.c_str(), FONT_SIZE);
+
+    ImFont* specialFont45 = io.Fonts->AddFontFromFileTTF(specialFontPath.c_str(), 45.0f);
+
+    ImFont* specialFont60 = io.Fonts->AddFontFromFileTTF(specialFontPath.c_str(), 60.0f);
+
+    if (regularFont == nullptr || specialFont45 == nullptr || specialFont60 == nullptr) {
+        std::cerr << "Failed to load fonts. Check file paths." << std::endl;
+        std::cerr << "Regular font path: " << regularFontPath << std::endl;
+        std::cerr << "Special font path: " << specialFontPath << std::endl;
+    }
+
+    io.Fonts->Build();
+}
+void ResetApplication() {
+    first_run = true;
+    movie_list.clear();
+    selected_movie = Movie();
+    image_url.clear();
+    movie_not_found = false;
+    connection_error = false;
+    selected_movie_index = -1;
+    search_in_progress.store(false);
+    movie_queue.clear();
+    memset(title_input, 0, sizeof(title_input));
+    memset(year_input, 0, sizeof(year_input));
+    show_not_in_list_message = false;
+
+    // Clear the image queue
+    std::queue<std::string> empty;
+    std::swap(image_queue, empty);
+
+}
 
 // Movie
 void FetchMovieList(const std::string& title, const std::string& year) {
@@ -115,6 +167,7 @@ void FetchMovieList(const std::string& title, const std::string& year) {
         if (response["Response"] == "True" && response.contains("Search")) {
             for (const auto& item : response["Search"]) {
                 Movie movie;
+                movie.id = item.value("imdbID", "");  
                 movie.title = item.value("Title", "Unknown");
                 movie.release_year = item.value("Year", "Unknown");
                 movie.poster_url = item.value("Poster", "");
@@ -126,10 +179,6 @@ void FetchMovieList(const std::string& title, const std::string& year) {
             }
             connection_error = false;
         }
-        else {
-            // No movies found or error in response
-            connection_error = false; // It's not a connection error, just no results
-        }
     }
     else {
         connection_error = true;
@@ -137,9 +186,9 @@ void FetchMovieList(const std::string& title, const std::string& year) {
 
     movie_queue.setFinished();
 }
-bool FetchMovieInfo(Movie& movie) { // info of a spesific movie 
+bool FetchMovieInfo(Movie& movie) { // info of a specific movie 
     std::string encoded_title = httplib::detail::encode_url(movie.title);
-    std::string url = "/?t=" + encoded_title + "&y=" + movie.release_year + "&apikey=" + api_key;
+    std::string url = "/?i=" + movie.id + "&apikey=" + api_key;
 
     httplib::Client cli("https://www.omdbapi.com");
     auto res = cli.Get(url);
@@ -156,8 +205,8 @@ bool FetchMovieInfo(Movie& movie) { // info of a spesific movie
             movie.producer = response.value("Director", "Unknown");
             movie.release_year = response.value("Year", movie.release_year);
             movie.runtime = response.value("Runtime", "Unknown");
-            movie.rating = response.value("imdbRating", "N/A");  // New line
-            movie.votes = response.value("imdbVotes", "N/A");    // New line
+            movie.rating = response.value("imdbRating", "N/A");
+            movie.votes = response.value("imdbVotes", "N/A");
 
             // Handle Genre
             movie.genres.clear();
@@ -177,7 +226,7 @@ bool FetchMovieInfo(Movie& movie) { // info of a spesific movie
                 movie.cast.push_back(actor);
             }
 
-            // Handle Poster
+            // Handle Poster (Updated part)
             if (response.contains("Poster") && response["Poster"] != "N/A") {
                 image_url = response["Poster"].get<std::string>();
                 movie.poster_url = image_url;
@@ -195,6 +244,12 @@ bool FetchMovieInfo(Movie& movie) { // info of a spesific movie
     return false;
 }
 void FetchMovieDetails(int index) {
+    if (index < 0 || index >= movie_list.size()) {
+        std::cerr << "Invalid movie index: " << index << std::endl;
+        fetch_in_progress.store(false);
+        return;
+    }
+
     Movie temp_movie = movie_list[index];
     bool fetch_success = FetchMovieInfo(temp_movie);
     if (fetch_success) {
@@ -202,14 +257,17 @@ void FetchMovieDetails(int index) {
         movie_list[index] = temp_movie;
         if (index == selected_movie_index) {
             selected_movie = temp_movie;
-            if (!temp_movie.poster_url.empty()) {
-                image_url = temp_movie.poster_url;
+            image_url = temp_movie.poster_url;  // This might be empty
+            if (!image_url.empty()) {
                 if (textureMap.find(image_url) == textureMap.end()) {
                     image_queue.push(image_url);
                     cv.notify_one();
                 }
             }
         }
+    }
+    else {
+        std::cerr << "Failed to fetch movie details for index: " << index << std::endl;
     }
     fetch_in_progress.store(false);
 }
@@ -237,6 +295,11 @@ GLuint LoadWelcomeImage(const char* filename)
     return texture_id;
 }
 void LoadImageFromUrl(const std::string& url) {
+    if (url.empty()) {
+        std::cerr << "Empty URL provided to LoadImageFromUrl" << std::endl;
+        return;
+    }
+
     httplib::SSLClient cli("m.media-amazon.com");
     cli.set_follow_location(true);
     cli.set_connection_timeout(10);
@@ -267,6 +330,9 @@ void LoadImageFromUrl(const std::string& url) {
     }
     else {
         std::cerr << "Failed to download image. Status: " << (res ? res->status : 0) << std::endl;
+        // Add a placeholder or dummy texture to prevent future loading attempts
+        std::lock_guard<std::mutex> lock(mtx);
+        textureMap[url] = { nullptr, 0, 0, 0, 0 };  // Dummy entry
     }
 }
 void ImageLoadingThread() {
@@ -279,7 +345,12 @@ void ImageLoadingThread() {
             image_queue.pop();
             lock.unlock();
 
-            LoadImageFromUrl(url);
+            if (!url.empty()) {
+                LoadImageFromUrl(url);
+            }
+            else {
+                std::cerr << "Empty URL in image queue" << std::endl;
+            }
         }
     }
 }
@@ -309,26 +380,26 @@ void SaveWatchList() {
     std::ofstream file(user_file);
     if (file.is_open()) {
         for (const auto& movie : watch_list) {
-            file << movie.title << "|" << movie.release_year << "\n";
+            file << movie.id << "|" << movie.title << "|" << movie.release_year << "\n";
         }
         file.close();
     }
 }
 void AddToWatchList(const Movie& movie) {
-    if (watch_list_titles.find(movie.title) == watch_list_titles.end()) {
+    if (watch_list_titles.find(movie.id) == watch_list_titles.end()) {
         watch_list.push_back(movie);
-        watch_list_titles.insert(movie.title);
+        watch_list_titles.insert(movie.id);
         if (!current_user.empty()) {
             SaveWatchList();
         }
     }
 }
-bool RemoveFromWatchList(const std::string& title) {
+bool RemoveFromWatchList(const std::string& id) {
     auto it = std::remove_if(watch_list.begin(), watch_list.end(),
-        [&title](const Movie& movie) { return movie.title == title; });
+        [&id](const Movie& movie) { return movie.id == id; });
     if (it != watch_list.end()) {
         watch_list.erase(it, watch_list.end());
-        watch_list_titles.erase(title);
+        watch_list_titles.erase(id);
         if (!current_user.empty()) {
             SaveWatchList();
         }
@@ -336,8 +407,8 @@ bool RemoveFromWatchList(const std::string& title) {
     }
     return false;
 }
-bool IsInWatchList(const std::string& title) {
-    return watch_list_titles.find(title) != watch_list_titles.end();
+bool IsInWatchList(const std::string& id) {
+    return watch_list_titles.find(id) != watch_list_titles.end();
 }
 void LoadWatchList(const std::string& username) {
     watch_list.clear();
@@ -349,13 +420,15 @@ void LoadWatchList(const std::string& username) {
     if (file.is_open()) {
         std::string line;
         while (std::getline(file, line)) {
-            size_t delimiter_pos = line.find('|');
-            if (delimiter_pos != std::string::npos) {
+            std::istringstream iss(line);
+            std::string id, title, year;
+            if (std::getline(iss, id, '|') && std::getline(iss, title, '|') && std::getline(iss, year)) {
                 Movie movie;
-                movie.title = line.substr(0, delimiter_pos);
-                movie.release_year = line.substr(delimiter_pos + 1);
+                movie.id = id;
+                movie.title = title;
+                movie.release_year = year;
                 watch_list.push_back(movie);
-                watch_list_titles.insert(movie.title);
+                watch_list_titles.insert(id);
             }
         }
         file.close();
@@ -395,51 +468,37 @@ void Logout() {
     current_user = "";
     watch_list.clear();
     watch_list_titles.clear();
-    first_run = true;  // Return to home screen
-    selected_movie = Movie();  // Clear selected movie
-    selected_movie_index = -1;
+    ResetApplication();
 }
 
-// Handle font 
-void LoadFonts(ImGuiIO& io) {
-    std::string exePath = GetExecutablePath();
-    std::string regularFontPath = exePath + "/" + REGULAR_FONT;
-    std::string specialFontPath = exePath + "/" + SPECIAL_FONT;
-
-    ImFont* regularFont = io.Fonts->AddFontFromFileTTF(regularFontPath.c_str(), FONT_SIZE);
-
-    ImFont* specialFont45 = io.Fonts->AddFontFromFileTTF(specialFontPath.c_str(), 45.0f);
-
-    ImFont* specialFont60 = io.Fonts->AddFontFromFileTTF(specialFontPath.c_str(), 60.0f);
-
-    if (regularFont == nullptr || specialFont45 == nullptr || specialFont60 == nullptr) {
-        std::cerr << "Failed to load fonts. Check file paths." << std::endl;
-        std::cerr << "Regular font path: " << regularFontPath << std::endl;
-        std::cerr << "Special font path: " << specialFontPath << std::endl;
-    }
-
-    io.Fonts->Build();
+// Sort Functions
+bool compareMoviesByTitle(const Movie& a, const Movie& b, bool ascending) {
+    return ascending ? (a.title < b.title) : (a.title > b.title);
 }
-
-// Home screen 
-void ResetApplication() {
-    first_run = true;
-    movie_list.clear();
-    selected_movie = Movie();
-    image_url.clear();
-    movie_not_found = false;
-    connection_error = false;
-    selected_movie_index = -1;
-    search_in_progress.store(false);
-    movie_queue.clear();
-    memset(title_input, 0, sizeof(title_input));
-    memset(year_input, 0, sizeof(year_input));
-    show_not_in_list_message = false;
-
-    // Clear the image queue
-    std::queue<std::string> empty;
-    std::swap(image_queue, empty);
-
+bool compareMoviesByYear(const Movie& a, const Movie& b, bool ascending) {
+    return ascending ? (a.release_year < b.release_year) : (a.release_year > b.release_year);
+}
+void sortWatchList() {
+    std::sort(watch_list.begin(), watch_list.end(),
+        [](const Movie& a, const Movie& b) {
+            if (sort_watch_list_by_year) {
+                return compareMoviesByYear(a, b, sort_watch_list_ascending);
+            }
+            else {
+                return compareMoviesByTitle(a, b, sort_watch_list_ascending);
+            }
+        });
+}
+void sortMovieList() {
+    std::sort(movie_list.begin(), movie_list.end(),
+        [](const Movie& a, const Movie& b) {
+            if (sort_movie_list_by_year) {
+                return compareMoviesByYear(a, b, sort_movie_list_ascending);
+            }
+            else {
+                return compareMoviesByTitle(a, b, sort_movie_list_ascending);
+            }
+        });
 }
 
 // handle api_key
@@ -448,13 +507,14 @@ void read_api_key() {
     if (file.is_open()) {
         std::getline(file, api_key);
         file.close();
-        std::cout << "API key read successfully." << std::endl;
     }
+
     else {
         std::cerr << "Unable to open api_key.txt" << std::endl;
     }
 }
 
+// Main
 
 int main() {
     read_api_key();
@@ -546,7 +606,7 @@ int main() {
 
         // AGM button in the top left corner
         ImGui::SetCursorPos(ImVec2(10.0f, 10.0f));
-        if (ImGui::Button("AGM")) {
+        if (ImGui::Button("AGM Home Screen")) {
             ResetApplication();
         }
 
@@ -561,13 +621,25 @@ int main() {
 
         // Display "Hello username" at the top of the screen in the middle, above the table lines
         if (!current_user.empty()) {
-            ImGui::PushFont(specialFont36);
-            ImGui::SetCursorPos(ImVec2(0, 27));
+            ImFont* specialFont48 = io.Fonts->Fonts[2]; // Assuming this is your largest font
+            ImGui::PushFont(specialFont48);
+
+            ImGui::SetCursorPos(ImVec2(0, 20)); // Moved up slightly to accommodate larger text
             ImGui::BeginGroup();
             ImGui::Dummy(ImVec2(display_w, 0.0f));
-            float textWidth = ImGui::CalcTextSize(("Hello " + current_user).c_str()).x;
+
+            std::string greeting = "Hello " + current_user;
+            float textWidth = ImGui::CalcTextSize(greeting.c_str()).x;
             ImGui::SetCursorPosX((display_w - textWidth) / 2.0f);
-            ImGui::TextColored(ImVec4(0.0f, 0.4f, 1.0f, 1.0f), "Hello %s", current_user.c_str());
+
+            // Added a subtle shadow effect for better visibility
+            ImVec2 originalPos = ImGui::GetCursorPos();
+            ImGui::SetCursorPos(ImVec2(originalPos.x + 2, originalPos.y + 2));
+            ImGui::TextColored(ImVec4(0.0f, 0.0f, 0.0f, 0.5f), "%s", greeting.c_str());
+            ImGui::SetCursorPos(originalPos);
+
+            ImGui::TextColored(ImVec4(0.0f, 0.5f, 1.0f, 1.0f), "%s", greeting.c_str());
+
             ImGui::EndGroup();
             ImGui::PopFont();
         }
@@ -666,7 +738,11 @@ int main() {
             ImGui::PopFont();
         }
 
-        else if (selected_movie_index != -1 && !selected_movie.title.empty()) {
+        else if (current_selected_list != SelectedList::None && selected_movie_index != -1) {
+            const Movie& movie_to_display = (current_selected_list == SelectedList::SearchResults)
+                ? movie_list[selected_movie_index]
+                : watch_list[selected_movie_index];
+
             if (fetch_in_progress.load()) {
                 ImGui::Text("Fetching movie details...");
             }
@@ -710,7 +786,7 @@ int main() {
                 }
             }
             else {
-                ImGui::Text("Image not available");
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "No poster available for this movie");
             }
 
 
@@ -779,14 +855,22 @@ int main() {
         // Right column: Search and movie list
         ImGui::BeginChild("SearchAndList", ImVec2(column_width, display_h - 100.0f), true);
 
+        ImGui::SetCursorPos(ImVec2(10, ImGui::GetCursorPosY() + 10));
+        ImGui::PushFont(io.Fonts->Fonts[0]);
+        ImGui::SetWindowFontScale(1.2f);
+        ImGui::TextColored(ImVec4(0.7f, 0.3f, 0.7f, 1.0f), "Search for a Movie:");
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopFont();
+
         // Title search
-        ImGui::Text("Search by Title:");
+        ImGui::Text("Title:");
         bool triggerSearch = ImGui::InputText("Title", title_input, IM_ARRAYSIZE(title_input),
             ImGuiInputTextFlags_EnterReturnsTrue);
 
         ImGui::Text("Year (optional):");
         triggerSearch |= ImGui::InputText("Year", year_input, IM_ARRAYSIZE(year_input),
-            ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackCharFilter,
+            FilterNumericInput);
 
         ImGui::SameLine();
         if (ImGui::Button("Search") || triggerSearch) {
@@ -849,22 +933,47 @@ int main() {
                 }
             }
         }
+
         // Display search results or messages
         if (search_in_progress.load()) {
             ImGui::Text("Searching...");
         }
         else if (!movie_list.empty()) {
-            if (movie_list.size() > 1) {
-                ImGui::Text("Select a movie:");
-                // Create a child window for the scrollable list
-                ImGui::BeginChild("MovieList", ImVec2(0, display_h * 0.3f), true);
+            ImGui::Text("Search Results:");
+            // Create a child window for the scrollable list
+            ImGui::BeginChild("MovieList", ImVec2(0, display_h * 0.3f), true);
+            if (ImGui::BeginTable("SearchResultsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable)) {
+                ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_DefaultSort);
+                ImGui::TableSetupColumn("Year", ImGuiTableColumnFlags_DefaultSort);
+                ImGui::TableHeadersRow();
+
+                if (ImGui::TableGetSortSpecs()->SpecsDirty) {
+                    ImGuiTableSortSpecs* sorts_specs = ImGui::TableGetSortSpecs();
+                    if (sorts_specs->Specs->ColumnIndex == 0) {
+                        sort_movie_list_by_year = false;
+                        sort_movie_list_ascending = sorts_specs->Specs->SortDirection == ImGuiSortDirection_Ascending;
+                    }
+                    else {
+                        sort_movie_list_by_year = true;
+                        sort_movie_list_ascending = sorts_specs->Specs->SortDirection == ImGuiSortDirection_Ascending;
+                    }
+                    sortMovieList();
+                    sorts_specs->SpecsDirty = false;
+                }
+
                 for (int i = 0; i < movie_list.size(); ++i) {
-                    if (ImGui::Selectable(movie_list[i].title.c_str(), selected_movie_index == i)) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    std::string selectable_label = movie_list[i].title + "##" + movie_list[i].id;
+                    if (ImGui::Selectable(selectable_label.c_str(),
+                        current_selected_list == SelectedList::SearchResults && selected_movie_index == i,
+                        ImGuiSelectableFlags_SpanAllColumns)) {
                         if (fetch_thread.joinable()) {
-                            fetch_thread.join(); // Ensure any previous fetch has completed
+                            fetch_thread.join();
                         }
                         first_run = false;
                         selected_movie_index = i;
+                        current_selected_list = SelectedList::SearchResults;
                         selected_movie = movie_list[i];
                         image_url.clear();
                         show_not_in_list_message = false;
@@ -872,74 +981,91 @@ int main() {
 
                         fetch_thread = std::thread(FetchMovieDetails, i);
                     }
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%s", movie_list[i].release_year.c_str());
                 }
-
-                ImGui::EndChild();
+                ImGui::EndTable();
             }
-            else {
-                // If there's only one movie, it's already selected and displayed
-                ImGui::Text("Displaying the only movie found:");
-                ImGui::Text("%s (%s)", selected_movie.title.c_str(), selected_movie.release_year.c_str());
-            }
+            ImGui::EndChild();
         }
         else if (movie_not_found) {
-            ImGui::Text("No movies found. Please try another search.");
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "No movies found. Please try another search.");
         }
         else if (connection_error) {
             ImGui::Text("Connection error occurred. Please check your internet connection and try again.");
         }
 
-        // Button to show watch list
-        ImGui::SetCursorPos(ImVec2(10, ImGui::GetCursorPosY()));
-        if (ImGui::Button("To Watch List")) {
-            ImGui::OpenPopup("WatchListPopup");
+        // Watch List Display
+        ImGui::SetCursorPos(ImVec2(10, ImGui::GetCursorPosY() + 10));
+        ImGui::PushFont(io.Fonts->Fonts[0]); 
+        ImGui::SetWindowFontScale(1.2f); 
+        ImGui::TextColored(ImVec4(0.7f, 0.3f, 0.7f, 1.0f), "My Watch List:");
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopFont();
+
+        if (current_user.empty()) {
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Log in to see your watch list");
         }
-        // Watch list popup
-        if (ImGui::BeginPopup("WatchListPopup")) {
-            ImGui::SetNextWindowSize(ImVec2(display_w * 0.8f, display_h * 0.8f));
-            if (watch_list.empty()) {
-                ImGui::Text("Watch list is empty.");
-            }
-            else {
-                if (ImGui::BeginTable("WatchListTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                    ImGui::TableSetupColumn("Title");
-                    ImGui::TableSetupColumn("Year");
-                    ImGui::TableHeadersRow();
+        else if (watch_list.empty()) {
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "No movies in your watch list");
+        }
+        else {
+            // Create a child window for the scrollable watch list
+            ImGui::BeginChild("WatchList", ImVec2(0, display_h * 0.3f), true);
+            if (ImGui::BeginTable("WatchListTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable)) {
+                ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_DefaultSort);
+                ImGui::TableSetupColumn("Year", ImGuiTableColumnFlags_DefaultSort);
+                ImGui::TableHeadersRow();
 
-                    for (int i = 0; i < watch_list.size(); ++i) {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        if (ImGui::Selectable(watch_list[i].title.c_str(), false,
-                            ImGuiSelectableFlags_SpanAllColumns)) {
-                            first_run = false;  // Exit the home screen only when a movie is selected
-                            selected_movie_index = i;
-                            selected_movie = watch_list[i];
-                            image_url = selected_movie.poster_url;
+                if (ImGui::TableGetSortSpecs()->SpecsDirty) {
+                    ImGuiTableSortSpecs* sorts_specs = ImGui::TableGetSortSpecs();
+                    if (sorts_specs->Specs->ColumnIndex == 0) {
+                        sort_watch_list_by_year = false;
+                        sort_watch_list_ascending = sorts_specs->Specs->SortDirection == ImGuiSortDirection_Ascending;
+                    }
+                    else {
+                        sort_watch_list_by_year = true;
+                        sort_watch_list_ascending = sorts_specs->Specs->SortDirection == ImGuiSortDirection_Ascending;
+                    }
+                    sortWatchList();
+                    sorts_specs->SpecsDirty = false;
+                }
 
-                            // Fetch detailed movie info when selected
-                            bool fetch_success = FetchMovieInfo(selected_movie);
-                            if (fetch_success) {
-                                // Load the image if it's not already loaded
-                                if (!image_url.empty()) {
-                                    std::unique_lock<std::mutex> lock(mtx);
-                                    if (textureMap.find(image_url) == textureMap.end()) {
-                                        image_queue.push(image_url);
-                                        cv.notify_one();
-                                    }
+                for (int i = 0; i < watch_list.size(); ++i) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    std::string selectable_label = watch_list[i].title + "##" + watch_list[i].id;
+                    if (ImGui::Selectable(selectable_label.c_str(),
+                        current_selected_list == SelectedList::WatchList && selected_movie_index == i,
+                        ImGuiSelectableFlags_SpanAllColumns)) {
+                        first_run = false;
+                        selected_movie_index = i;
+                        current_selected_list = SelectedList::WatchList;
+                        selected_movie = watch_list[i];
+                        image_url = selected_movie.poster_url;
+
+                        // Fetch detailed movie info when selected
+                        bool fetch_success = FetchMovieInfo(selected_movie);
+                        if (fetch_success) {
+                            // Load the image if it's not already loaded
+                            if (!image_url.empty()) {
+                                std::unique_lock<std::mutex> lock(mtx);
+                                if (textureMap.find(image_url) == textureMap.end()) {
+                                    image_queue.push(image_url);
+                                    cv.notify_one();
                                 }
-                                ImGui::CloseCurrentPopup();  // Close the popup after selection
-                            }
-                            else {
-                                ImGui::Text("Failed to fetch movie details. Please try again.");
                             }
                         }
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%s", watch_list[i].release_year.c_str());
+                        else {
+                            ImGui::Text("Failed to fetch movie details. Please try again.");
+                        }
                     }
-                    ImGui::EndTable();
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%s", watch_list[i].release_year.c_str());
                 }
+                ImGui::EndTable();
             }
-            ImGui::EndPopup();
+            ImGui::EndChild();
         }
 
         ImGui::EndChild();
