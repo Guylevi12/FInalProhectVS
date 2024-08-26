@@ -35,6 +35,9 @@
     <ClCompile Include="src\imgui_widgets.cpp" />
     <ClCompile Include="src\tinyxml2.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="main.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>

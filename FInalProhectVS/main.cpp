@@ -87,7 +87,7 @@ std::thread fetch_thread;
 
 // Movie
 bool FetchMovieInfo(Movie& movie) {
-    std::string api_key = "67880361"; // Replace with your OMDb API key
+    std::string api_key = "766745cb"; // Replace with your OMDb API key
     std::string encoded_title = httplib::detail::encode_url(movie.title);
     std::string url = "/?t=" + encoded_title + "&y=" + movie.release_year + "&apikey=" + api_key;
 
@@ -143,7 +143,7 @@ bool FetchMovieInfo(Movie& movie) {
     }
     connection_error = false;
     return false;
-}void FetchMovieList(const std::string& title, const std::string& year);
+}
 void FetchMovieList(const std::string& title, const std::string& year) {
     std::string api_key = "766745cb"; // Make sure this is your correct API key
     std::string encoded_title = httplib::detail::encode_url(title);
