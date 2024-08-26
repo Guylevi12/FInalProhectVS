@@ -21,9 +21,6 @@ This application is a graphical user interface (GUI) program that allows users t
 - cpp-httplib
 - OpenSSL
 
-## Building the Application
-(Include specific build instructions here, e.g., using CMake or your preferred build system)
-
 ## Usage
 1. Launch the application
 2. Log in or create a new user profile
