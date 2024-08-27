@@ -364,5 +364,5 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # Include OpenSSL bin and lib folders
-!include/openssl/bin/
-!include/openssl/lib/
+!FInalProhectVS/include/OpenSSL/bin/
+!FInalProhectVS/include/OpenSSL/lib/
