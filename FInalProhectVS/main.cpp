@@ -1,6 +1,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 
+
 #include <iostream>
 #include <string>
 
@@ -303,60 +304,158 @@ void FetchMovieInfoThread(const Movie& movie, int index) { // when removing a mo
     }
     fetch_in_progress.store(false);
 }
-void FetchMovieDetails(int index) { // fetches imformation about the movies from cur movie  list
+void FetchMovieDetails(int index) {
     Movie temp_movie = movie_list[index];
     bool fetch_success = FetchMovieInfo(temp_movie);
     if (fetch_success) {
-        std::lock_guard<std::mutex> lock(mtx);
-        temp_movie.in_watch_list = IsInWatchList(temp_movie.id);
-        movie_list[index] = temp_movie;
-        if (index == selected_movie_index) {
-            selected_movie = temp_movie;
-            if (!temp_movie.poster_url.empty()) {
-                image_url = temp_movie.poster_url;
-                if (textureMap.find(image_url) == textureMap.end()) {
-                    image_queue.push(image_url);
-                    cv.notify_one();
+        bool need_to_fetch_image = false;
+        std::string url_to_fetch;
+
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+
+            temp_movie.in_watch_list = IsInWatchList(temp_movie.id);
+            movie_list[index] = temp_movie;
+
+            if (index == selected_movie_index) {
+                selected_movie = temp_movie;
+
+                if (!temp_movie.poster_url.empty()) {
+                    image_url = temp_movie.poster_url;
+                    if (textureMap.find(image_url) == textureMap.end()) {
+                        need_to_fetch_image = true;
+                        url_to_fetch = image_url;
+                    }
                 }
             }
+        }
+
+        if (need_to_fetch_image) {
+            std::lock_guard<std::mutex> lock(mtx);
+            image_queue.push(url_to_fetch);
+            cv.notify_one();
         }
     }
     fetch_in_progress.store(false);
 }
 
 // Image
+bool IsValidImageData(const ImageData& imageData, const std::string& url) {
+    if (imageData.data == nullptr || imageData.width == 0 || imageData.height == 0) {
+        std::cerr << "Invalid image data for " << url << std::endl;
+        return false;
+    }
+    return true;
+}
+void CleanupOnError(ImageData& imageData) {
+    if (imageData.texture_id != 0) {
+        glDeleteTextures(1, &imageData.texture_id);
+        imageData.texture_id = 0;
+    }
+    if (imageData.data != nullptr) {
+        stbi_image_free(imageData.data);
+        imageData.data = nullptr;
+    }
+    imageData.state = ImageState::Error;
+}
 void CreateTexture(const std::string& url) {
-    std::lock_guard<std::mutex> lock(mtx);
-    if (textureMap.find(url) != textureMap.end()) {
-        ImageData& imageData = textureMap[url];
-        if (imageData.texture_id == 0 && imageData.data != nullptr) {
-            glGenTextures(1, &imageData.texture_id);
-            if (imageData.texture_id == 0) {
-                std::cerr << "Failed to generate texture for " << url << std::endl;
+    try {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (textureMap.find(url) != textureMap.end()) {
+            ImageData& imageData = textureMap[url];
+
+            if (imageData.data == nullptr || imageData.width == 0 || imageData.height == 0 || imageData.channels == 0) {
+                std::cerr << "Invalid image data for " << url << std::endl;
+                CleanupOnError(imageData);
                 return;
             }
 
-            glBindTexture(GL_TEXTURE_2D, imageData.texture_id);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-            GLenum format = (imageData.channels == 4) ? GL_RGBA : GL_RGB;
-            glTexImage2D(GL_TEXTURE_2D, 0, format, imageData.width, imageData.height, 0,
-                format, GL_UNSIGNED_BYTE, imageData.data);
-
-            GLenum error = glGetError();
-            if (error != GL_NO_ERROR) {
-                std::cerr << "OpenGL error in CreateTexture: " << error << std::endl;
-                imageData.state = ImageState::Error;
+            if (!glfwGetCurrentContext()) {
+                std::cerr << "No OpenGL context current for thread" << std::endl;
+                return;
             }
-            else {
+
+            if (imageData.texture_id == 0 && imageData.data != nullptr) {
+                if (!IsValidImageData(imageData, url)) {
+                    CleanupOnError(imageData);
+                    return;
+                }
+                GLint maxTextureSize;
+                glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+                if (imageData.width > maxTextureSize || imageData.height > maxTextureSize) {
+                    std::cerr << "Texture size exceeds maximum allowed size for " << url << std::endl;
+                    CleanupOnError(imageData);
+                    return;
+                }
+                glGenTextures(1, &imageData.texture_id);
+                if (imageData.texture_id == 0) {
+                    std::cerr << "Failed to generate texture for " << url << std::endl;
+                    CleanupOnError(imageData);
+                    return;
+                }
+                glBindTexture(GL_TEXTURE_2D, imageData.texture_id);
+                GLenum error = glGetError();
+                if (error != GL_NO_ERROR) {
+                    std::cerr << "OpenGL error in glBindTexture: " << error << std::endl;
+                    CleanupOnError(imageData);
+                    return;
+                }
+
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                error = glGetError();
+                if (error != GL_NO_ERROR) {
+                    std::cerr << "OpenGL error in glTexParameteri (MIN_FILTER): " << error << std::endl;
+                    CleanupOnError(imageData);
+                    return;
+                }
+
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                error = glGetError();
+                if (error != GL_NO_ERROR) {
+                    std::cerr << "OpenGL error in glTexParameteri (MAG_FILTER): " << error << std::endl;
+                    CleanupOnError(imageData);
+                    return;
+                }
+
+                GLenum internalFormat, format;
+                if (imageData.channels == 1) {
+                    internalFormat = GL_RED;
+                    format = GL_RED;
+                }
+                else if (imageData.channels == 3) {
+                    internalFormat = GL_RGB;
+                    format = GL_RGB;
+                }
+                else if (imageData.channels == 4) {
+                    internalFormat = GL_RGBA;
+                    format = GL_RGBA;
+                }
+                else {
+                    std::cerr << "Unsupported number of channels: " << imageData.channels << " for " << url << std::endl;
+                    CleanupOnError(imageData);
+                    return;
+                }
+                glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, imageData.width, imageData.height, 0,
+                    format, GL_UNSIGNED_BYTE, imageData.data);
+                error = glGetError();
+                if (error != GL_NO_ERROR) {
+                    std::cerr << "OpenGL error in glTexImage2D: " << error << std::endl;
+                    CleanupOnError(imageData);
+                    return;
+                }
                 imageData.state = ImageState::Loaded;
-            }
 
-            glBindTexture(GL_TEXTURE_2D, 0);
-            stbi_image_free(imageData.data);
-            imageData.data = nullptr;
+                glBindTexture(GL_TEXTURE_2D, 0);
+                stbi_image_free(imageData.data);
+                imageData.data = nullptr;
+            }
         }
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Exception in CreateTexture: " << e.what() << std::endl;
+    }
+    catch (...) {
+        std::cerr << "Unknown exception in CreateTexture" << std::endl;
     }
 }
 void EnsureImageLoaded(const std::string& url) {
@@ -408,7 +507,7 @@ void DisplayMoviePoster(const std::string& poster_url, float image_width, float 
 GLuint LoadWelcomeImage(const char* filename)
 {
     int width, height, channels;
-    unsigned char* data = stbi_load(filename, &width, &height, &channels, 0);
+    unsigned char* data = stbi_load(filename, &width, &height, &channels, STBI_rgb_alpha);
     if (!data) {
         std::cerr << "Failed to load welcome image: " << filename << std::endl;
         std::cerr << "STB Error: " << stbi_failure_reason() << std::endl;
@@ -420,9 +519,11 @@ GLuint LoadWelcomeImage(const char* filename)
     glBindTexture(GL_TEXTURE_2D, texture_id);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, channels == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, data);
-    glBindTexture(GL_TEXTURE_2D, 0);
 
+    // Since we're using STBI_rgb_alpha, we always have 4 channels
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
     stbi_image_free(data);
     return texture_id;
 }
@@ -451,16 +552,17 @@ void LoadImageFromUrl(const std::string& url) {
             (int)res->body.size(), &width, &height, &channels, 0
         );
 
-        if (data) {
-            std::unique_lock<std::mutex> lock(mtx);
-            textureMap[url] = { data, width, height, channels, 0, ImageState::Loaded };
-            glfwPostEmptyEvent();
+        if (data == nullptr) {
+            std::cerr << "Failed to load image from " << url << ": " << stbi_failure_reason() << std::endl;
+            return;
         }
-        else {
-            std::cerr << "Failed to decode image data for URL: " << url << ". STB Error: " << stbi_failure_reason() << std::endl;
-            std::lock_guard<std::mutex> lock(mtx);
-            textureMap[url] = { nullptr, 0, 0, 0, 0, ImageState::Error };
-        }
+
+
+
+        std::unique_lock<std::mutex> lock(mtx);
+        textureMap[url] = { data, width, height, channels, 0, ImageState::Loaded };
+        glfwPostEmptyEvent();
+
     }
     else {
         std::cerr << "Failed to download image from URL: " << url << ". Status: " << (res ? res->status : 0) << std::endl;
@@ -473,13 +575,20 @@ void ImageLoadingThread() {
         std::unique_lock<std::mutex> lock(mtx);
         if (cv.wait_for(lock, std::chrono::seconds(1), [] { return !image_queue.empty() || !image_thread_running; })) {
             if (!image_thread_running) break;
-
             std::string url = image_queue.front();
             image_queue.pop();
             lock.unlock();
 
-            if (!url.empty()) {
-                LoadImageFromUrl(url);
+            if (!url.empty() && url != "N/A") {
+                try {
+                    LoadImageFromUrl(url);
+                }
+                catch (const std::exception& e) {
+                    std::cerr << "Exception in LoadImageFromUrl: " << e.what() << std::endl;
+                }
+                catch (...) {
+                    std::cerr << "Unknown exception in LoadImageFromUrl" << std::endl;
+                }
             }
             else {
                 std::cerr << "Empty URL in image queue" << std::endl;
@@ -526,7 +635,7 @@ std::pair<bool, int> RemoveFromWatchList(const std::string& id) {
         [&id](const Movie& movie) { return movie.id == id; });
 
     if (it != watch_list.end()) {
-        int removed_index = std::distance(watch_list.begin(), it);
+        std::size_t removed_index = static_cast<std::size_t>(std::distance(watch_list.begin(), it));
         watch_list.erase(it);
         watch_list_titles.erase(id);
 
@@ -542,7 +651,7 @@ std::pair<bool, int> RemoveFromWatchList(const std::string& id) {
         }
 
         // Determine the new selected index
-        int new_index = removed_index;
+        std::size_t new_index = removed_index;
         if (new_index >= watch_list.size()) {
             new_index = watch_list.size() - 1;
         }
