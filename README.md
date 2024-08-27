@@ -3,7 +3,7 @@ This application is a graphical user interface (GUI) program that allows users t
 
 ## Necessary
 - after first download insert:
-- PATH=$(ProjectDir)include\OpenSSL\bin;%PATH%.
+- PATH=$(ProjectDir)include\OpenSSL\bin;%PATH%
 - inside Configuration properties/Debugging/Environment.
 - make sure that All Configurations is selected in Configuration as well as All Platforms in Platform.
 - make an API key from the OMBD website.
