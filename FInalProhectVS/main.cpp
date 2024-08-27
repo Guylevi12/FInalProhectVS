@@ -15,6 +15,7 @@
 #include <set>
 
 #include <fstream>
+#include <ctime>
 #include <filesystem>
 
 #include <glad/glad.h>
@@ -50,6 +51,7 @@ struct Movie {
     GLuint texture_id = 0;
     std::string rating;
     std::string votes;
+    bool in_watch_list = false;
 };
 struct ImageData {
     unsigned char* data = nullptr;
@@ -100,6 +102,15 @@ std::string api_key;
 // Functions:
 
 // General
+void logError(const std::string& message) {
+    std::ofstream logFile("error_log.txt", std::ios_base::app);
+    if (logFile.is_open()) {
+        time_t now = time(0);
+        char* dt = ctime(&now);
+        logFile << dt << ": " << message << std::endl;
+        logFile.close();
+    }
+}
 std::string GetExecutablePath() {
     return fs::current_path().string();
 }
@@ -149,6 +160,9 @@ void ResetApplication() {
 }
 
 // Movie
+bool IsInWatchList(const std::string& id) {
+    return watch_list_titles.find(id) != watch_list_titles.end();
+}
 void FetchMovieList(const std::string& title, const std::string& year) {
     std::string encoded_title = httplib::detail::encode_url(title);
     std::string url = "/?s=" + encoded_title + "&type=movie&apikey=" + api_key;
@@ -167,7 +181,7 @@ void FetchMovieList(const std::string& title, const std::string& year) {
         if (response["Response"] == "True" && response.contains("Search")) {
             for (const auto& item : response["Search"]) {
                 Movie movie;
-                movie.id = item.value("imdbID", "");  
+                movie.id = item.value("imdbID", "");
                 movie.title = item.value("Title", "Unknown");
                 movie.release_year = item.value("Year", "Unknown");
                 movie.poster_url = item.value("Poster", "");
@@ -179,6 +193,11 @@ void FetchMovieList(const std::string& title, const std::string& year) {
             }
             connection_error = false;
         }
+        else {
+            // No movies found or error in response
+            connection_error = false; // It's not a connection error, just no results
+            movie_not_found = true;
+        }
     }
     else {
         connection_error = true;
@@ -186,79 +205,111 @@ void FetchMovieList(const std::string& title, const std::string& year) {
 
     movie_queue.setFinished();
 }
-bool FetchMovieInfo(Movie& movie) { // info of a specific movie 
-    std::string encoded_title = httplib::detail::encode_url(movie.title);
-    std::string url = "/?i=" + movie.id + "&apikey=" + api_key;
+bool FetchMovieInfo(Movie& movie) { // info of a spesific movie 
+    try {
+        std::string encoded_title = httplib::detail::encode_url(movie.title);
+        std::string url = "/?t=" + encoded_title + "&y=" + movie.release_year + "&apikey=" + api_key;
 
-    httplib::Client cli("https://www.omdbapi.com");
-    auto res = cli.Get(url);
+        httplib::Client cli("https://www.omdbapi.com");
+        auto res = cli.Get(url);
 
-    if (!res) {
-        connection_error = true;
-        return false;
-    }
+        if (!res) {
+            logError("Connection error in FetchMovieInfo for movie: " + movie.title);
+            connection_error = true;
+            return false;
+        }
 
-    if (res->status == 200) {
-        json response = json::parse(res->body);
-        if (response["Response"] == "True") {
-            movie.title = response.value("Title", movie.title);
-            movie.producer = response.value("Director", "Unknown");
-            movie.release_year = response.value("Year", movie.release_year);
-            movie.runtime = response.value("Runtime", "Unknown");
-            movie.rating = response.value("imdbRating", "N/A");
-            movie.votes = response.value("imdbVotes", "N/A");
+        if (res->status == 200) {
+            json response = json::parse(res->body);
+            if (response["Response"] == "True") {
+                movie.title = response.value("Title", movie.title);
+                movie.producer = response.value("Director", "Unknown");
+                movie.release_year = response.value("Year", movie.release_year);
+                movie.runtime = response.value("Runtime", "Unknown");
+                movie.rating = response.value("imdbRating", "N/A");
+                movie.votes = response.value("imdbVotes", "N/A");
+                movie.id = response.value("imdbID", "");
 
-            // Handle Genre
-            movie.genres.clear();
-            std::string genre_str = response.value("Genre", "");
-            std::istringstream ss(genre_str);
-            std::string genre;
-            while (std::getline(ss, genre, ',')) {
-                movie.genres.push_back(genre);
-            }
+                // Handle Genre
+                movie.genres.clear();
+                std::string genre_str = response.value("Genre", "");
+                std::istringstream ss(genre_str);
+                std::string genre;
+                while (std::getline(ss, genre, ',')) {
+                    movie.genres.push_back(genre);
+                }
 
-            // Handle Cast
-            movie.cast.clear();
-            std::string cast_str = response.value("Actors", "");
-            std::istringstream cast_ss(cast_str);
-            std::string actor;
-            while (std::getline(cast_ss, actor, ',')) {
-                movie.cast.push_back(actor);
-            }
+                // Handle Cast
+                movie.cast.clear();
+                std::string cast_str = response.value("Actors", "");
+                std::istringstream cast_ss(cast_str);
+                std::string actor;
+                while (std::getline(cast_ss, actor, ',')) {
+                    movie.cast.push_back(actor);
+                }
 
-            // Handle Poster (Updated part)
-            if (response.contains("Poster") && response["Poster"] != "N/A") {
-                image_url = response["Poster"].get<std::string>();
-                movie.poster_url = image_url;
+                // Handle Poster
+                if (response.contains("Poster") && response["Poster"] != "N/A") {
+                    image_url = response["Poster"].get<std::string>();
+                    movie.poster_url = image_url;
+                }
+                else {
+                    image_url = "";
+                    movie.poster_url = "";
+                }
+
+                connection_error = false;
+                return true;
             }
             else {
-                image_url = "";
-                movie.poster_url = "";
+                logError("API returned false response for movie: " + movie.title);
             }
-
-            connection_error = false;
-            return true;
+        }
+        else {
+            logError("API returned non-200 status for movie: " + movie.title + ". Status: " + std::to_string(res->status));
         }
     }
+    catch (const std::exception& e) {
+        logError("Exception in FetchMovieInfo for movie: " + movie.title + ". Error: " + e.what());
+    }
+
     connection_error = false;
     return false;
 }
-void FetchMovieDetails(int index) {
-    if (index < 0 || index >= movie_list.size()) {
-        std::cerr << "Invalid movie index: " << index << std::endl;
-        fetch_in_progress.store(false);
-        return;
+void FetchMovieInfoThread(const Movie& movie, int index) {
+    Movie temp_movie = movie;
+    bool fetch_success = FetchMovieInfo(temp_movie);
+    if (fetch_success) {
+        std::lock_guard<std::mutex> lock(mtx);
+        selected_movie = temp_movie;
+        if (index >= 0 && index < watch_list.size()) {
+            watch_list[index] = temp_movie;
+        }
+        // Load the image if it's not already loaded
+        if (!temp_movie.poster_url.empty()) {
+            if (textureMap.find(temp_movie.poster_url) == textureMap.end()) {
+                image_queue.push(temp_movie.poster_url);
+                cv.notify_one();
+            }
+        }
     }
+    else {
+        logError("Failed to fetch movie info for: " + temp_movie.title);
+    }
+    fetch_in_progress.store(false);
+}
 
+void FetchMovieDetails(int index) {
     Movie temp_movie = movie_list[index];
     bool fetch_success = FetchMovieInfo(temp_movie);
     if (fetch_success) {
         std::lock_guard<std::mutex> lock(mtx);
+        temp_movie.in_watch_list = IsInWatchList(temp_movie.id);
         movie_list[index] = temp_movie;
         if (index == selected_movie_index) {
             selected_movie = temp_movie;
-            image_url = temp_movie.poster_url;  // This might be empty
-            if (!image_url.empty()) {
+            if (!temp_movie.poster_url.empty()) {
+                image_url = temp_movie.poster_url;
                 if (textureMap.find(image_url) == textureMap.end()) {
                     image_queue.push(image_url);
                     cv.notify_one();
@@ -266,13 +317,75 @@ void FetchMovieDetails(int index) {
             }
         }
     }
-    else {
-        std::cerr << "Failed to fetch movie details for index: " << index << std::endl;
-    }
     fetch_in_progress.store(false);
 }
 
 // Image
+void CreateTexture(const std::string& url) {
+    std::lock_guard<std::mutex> lock(mtx);
+    if (textureMap.find(url) != textureMap.end()) {
+        ImageData& imageData = textureMap[url];
+        if (imageData.texture_id == 0 && imageData.data != nullptr) {
+            glGenTextures(1, &imageData.texture_id);
+            if (imageData.texture_id == 0) {
+                std::cerr << "Failed to generate texture for " << url << std::endl;
+                return;
+            }
+
+            glBindTexture(GL_TEXTURE_2D, imageData.texture_id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+            GLenum format = (imageData.channels == 4) ? GL_RGBA : GL_RGB;
+            glTexImage2D(GL_TEXTURE_2D, 0, format, imageData.width, imageData.height, 0,
+                format, GL_UNSIGNED_BYTE, imageData.data);
+
+            GLenum error = glGetError();
+            if (error != GL_NO_ERROR) {
+                std::cerr << "OpenGL error in CreateTexture: " << error << std::endl;
+            }
+
+            glBindTexture(GL_TEXTURE_2D, 0);
+            stbi_image_free(imageData.data);
+            imageData.data = nullptr;
+        }
+    }
+}
+void EnsureImageLoaded(const std::string& url) {
+    if (url.empty()) return;
+
+    std::lock_guard<std::mutex> lock(mtx);
+    auto it = textureMap.find(url);
+    if (it == textureMap.end() || (it->second.data == nullptr && it->second.texture_id == 0)) {
+        // Image not loaded, start loading
+        image_queue.push(url);
+        cv.notify_one();
+    }
+}
+void DisplayMoviePoster(const std::string& poster_url, float image_width, float image_height) {
+    if (!poster_url.empty()) {
+        EnsureImageLoaded(poster_url);
+        auto it = textureMap.find(poster_url);
+        if (it != textureMap.end()) {
+            if (it->second.texture_id != 0) {
+                ImGui::Image((void*)(intptr_t)it->second.texture_id, ImVec2(image_width, image_height));
+            }
+            else if (it->second.data != nullptr) {
+                ImGui::Text("Creating texture...");
+                CreateTexture(poster_url);
+            }
+            else {
+                ImGui::Text("Loading image...");
+            }
+        }
+        else {
+            ImGui::Text("Loading image...");
+        }
+    }
+    else {
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "No poster available for this movie");
+    }
+}
 GLuint LoadWelcomeImage(const char* filename)
 {
     int width, height, channels;
@@ -306,7 +419,7 @@ void LoadImageFromUrl(const std::string& url) {
     cli.set_read_timeout(10);
 
     httplib::Headers headers = {
-            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
     };
 
     std::string path = url.substr(url.find("/images"));
@@ -325,14 +438,15 @@ void LoadImageFromUrl(const std::string& url) {
             glfwPostEmptyEvent();
         }
         else {
-            std::cerr << "Failed to decode image data. STB Error: " << stbi_failure_reason() << std::endl;
+            std::cerr << "Failed to decode image data for URL: " << url << ". STB Error: " << stbi_failure_reason() << std::endl;
+            std::lock_guard<std::mutex> lock(mtx);
+            textureMap[url] = { nullptr, 0, 0, 0, 0 };  // Dummy entry to prevent future loading attempts
         }
     }
     else {
-        std::cerr << "Failed to download image. Status: " << (res ? res->status : 0) << std::endl;
-        // Add a placeholder or dummy texture to prevent future loading attempts
+        std::cerr << "Failed to download image from URL: " << url << ". Status: " << (res ? res->status : 0) << std::endl;
         std::lock_guard<std::mutex> lock(mtx);
-        textureMap[url] = { nullptr, 0, 0, 0, 0 };  // Dummy entry
+        textureMap[url] = { nullptr, 0, 0, 0, 0 };  // Dummy entry to prevent future loading attempts
     }
 }
 void ImageLoadingThread() {
@@ -354,22 +468,7 @@ void ImageLoadingThread() {
         }
     }
 }
-void CreateTexture(const std::string& url) {
-    if (textureMap.find(url) != textureMap.end()) {
-        ImageData& imageData = textureMap[url];
-        if (imageData.texture_id == 0 && imageData.data != nullptr) {
-            glGenTextures(1, &imageData.texture_id);
-            glBindTexture(GL_TEXTURE_2D, imageData.texture_id);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, imageData.width, imageData.height, 0,
-                imageData.channels == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, imageData.data);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            stbi_image_free(imageData.data);
-            imageData.data = nullptr;
-        }
-    }
-}
+
 
 // Handle Watch list
 void SaveWatchList() {
@@ -387,28 +486,51 @@ void SaveWatchList() {
 }
 void AddToWatchList(const Movie& movie) {
     if (watch_list_titles.find(movie.id) == watch_list_titles.end()) {
-        watch_list.push_back(movie);
+        Movie watch_list_movie = movie;
+        watch_list_movie.in_watch_list = true;
+        watch_list.push_back(watch_list_movie);
         watch_list_titles.insert(movie.id);
         if (!current_user.empty()) {
             SaveWatchList();
         }
+        if (selected_movie.id == movie.id) {
+            selected_movie.in_watch_list = true;
+        }
     }
 }
-bool RemoveFromWatchList(const std::string& id) {
-    auto it = std::remove_if(watch_list.begin(), watch_list.end(),
+std::pair<bool, int> RemoveFromWatchList(const std::string& id) {
+    if (!IsInWatchList(id)) {
+        return { false, -1 };  // The movie is not in the watch list, so we can't remove it
+    }
+
+    auto it = std::find_if(watch_list.begin(), watch_list.end(),
         [&id](const Movie& movie) { return movie.id == id; });
+
     if (it != watch_list.end()) {
-        watch_list.erase(it, watch_list.end());
+        int removed_index = std::distance(watch_list.begin(), it);
+        watch_list.erase(it);
         watch_list_titles.erase(id);
+
+        // Update the in_watch_list status for all movies in movie_list
+        for (auto& movie : movie_list) {
+            if (movie.id == id) {
+                movie.in_watch_list = false;
+            }
+        }
+
         if (!current_user.empty()) {
             SaveWatchList();
         }
-        return true;
+
+        // Determine the new selected index
+        int new_index = removed_index;
+        if (new_index >= watch_list.size()) {
+            new_index = watch_list.size() - 1;
+        }
+
+        return { true, new_index };
     }
-    return false;
-}
-bool IsInWatchList(const std::string& id) {
-    return watch_list_titles.find(id) != watch_list_titles.end();
+    return { false, -1 };
 }
 void LoadWatchList(const std::string& username) {
     watch_list.clear();
@@ -427,6 +549,7 @@ void LoadWatchList(const std::string& username) {
                 movie.id = id;
                 movie.title = title;
                 movie.release_year = year;
+                movie.in_watch_list = true;
                 watch_list.push_back(movie);
                 watch_list_titles.insert(id);
             }
@@ -515,7 +638,6 @@ void read_api_key() {
 }
 
 // Main
-
 int main() {
     read_api_key();
 
@@ -649,7 +771,9 @@ int main() {
             static char username[256] = "";
             if (current_user.empty()) {
                 ImGui::InputText("Username", username, IM_ARRAYSIZE(username));
-                if (ImGui::Button("Login") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+                ImGui::BeginDisabled(strlen(username) == 0);
+
+                if (ImGui::Button("Login") || (ImGui::IsKeyPressed(ImGuiKey_Enter) && strlen(username) > 0)) {
                     if (UserLogin(username)) {
                         ImGui::CloseCurrentPopup();
                     }
@@ -657,6 +781,12 @@ int main() {
                         // Handle login failure
                         ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Login failed. Please try again.");
                     }
+                }
+                ImGui::EndDisabled();
+
+                ImGui::SameLine();
+                if (ImGui::Button("Continue without login")) {
+                    ImGui::CloseCurrentPopup();
                 }
             }
             else {
@@ -675,7 +805,9 @@ int main() {
             ImGui::Text("You need to log in to add movies to your watch list.");
             static char login_username[256] = "";
             ImGui::InputText("Username", login_username, IM_ARRAYSIZE(login_username));
-            if (ImGui::Button("Login") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+
+            ImGui::BeginDisabled(strlen(login_username) == 0);
+            if (ImGui::Button("Login") || (ImGui::IsKeyPressed(ImGuiKey_Enter) && strlen(login_username) > 0)) {
                 if (UserLogin(login_username)) {
                     AddToWatchList(selected_movie);
                     ImGui::CloseCurrentPopup();
@@ -684,6 +816,8 @@ int main() {
                     ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Login failed. Please try again.");
                 }
             }
+            ImGui::EndDisabled();
+
             ImGui::SameLine();
             if (ImGui::Button("Continue without login")) {
                 ImGui::CloseCurrentPopup();
@@ -738,30 +872,29 @@ int main() {
             ImGui::PopFont();
         }
 
-        else if (current_selected_list != SelectedList::None && selected_movie_index != -1) {
-            const Movie& movie_to_display = (current_selected_list == SelectedList::SearchResults)
-                ? movie_list[selected_movie_index]
-                : watch_list[selected_movie_index];
+        // Display movie details
+        if (current_selected_list != SelectedList::None && selected_movie_index != -1) {
+            // Create a fixed layout
+            ImGui::BeginChild("MovieDetailsLayout", ImVec2(0, -1), false, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 
+            // Left side: Text information
+            ImGui::BeginChild("MovieInfo", ImVec2(ImGui::GetWindowWidth() * 0.6f, -1), false);
             if (fetch_in_progress.load()) {
                 ImGui::Text("Fetching movie details...");
             }
             else {
-                // Display movie details
                 ImGui::Text("Title: %s", selected_movie.title.c_str());
                 ImGui::Text("Year: %s", selected_movie.release_year.c_str());
                 ImGui::Text("Director: %s", selected_movie.producer.c_str());
                 ImGui::Text("Runtime: %s", selected_movie.runtime.c_str());
                 ImGui::Text("IMDb Rating: %s", selected_movie.rating.c_str());
                 ImGui::Text("Votes: %s", selected_movie.votes.c_str());
-
                 if (!selected_movie.genres.empty()) {
                     ImGui::Text("Genres:");
                     for (const auto& genre : selected_movie.genres) {
                         ImGui::BulletText("%s", genre.c_str());
                     }
                 }
-
                 if (!selected_movie.cast.empty()) {
                     ImGui::Text("Cast:");
                     for (const auto& actor : selected_movie.cast) {
@@ -769,26 +902,17 @@ int main() {
                     }
                 }
             }
+            ImGui::EndChild();
 
-            // Display movie poster
-            if (!image_url.empty() && textureMap.find(image_url) != textureMap.end()) {
-                const auto& imageData = textureMap[image_url];
-                if (imageData.texture_id != 0) {
-                    ImGui::Image((void*)(intptr_t)imageData.texture_id, ImVec2(200, 300));
-                }
-                else if (imageData.data != nullptr) {
-                    // Create texture on the main thread
-                    CreateTexture(image_url);
-                    ImGui::Text("Image loaded, creating texture...");
-                }
-                else {
-                    ImGui::Text("Image is still loading...");
-                }
-            }
-            else {
-                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "No poster available for this movie");
-            }
+            // Right side: Image
+            ImGui::SameLine();
+            ImGui::BeginChild("MoviePoster", ImVec2(-1, -1), false);
+            float image_width = 200;
+            float image_height = 300;
+            DisplayMoviePoster(selected_movie.poster_url, image_width, image_height);
+            ImGui::EndChild(); // MoviePoster
 
+            ImGui::EndChild(); // MovieDetailsLayout
 
             // Add to watch list button
             if (ImGui::Button("Add to Watch List")) {
@@ -797,54 +921,165 @@ int main() {
                     ImGui::OpenPopup("LoginRequiredPopup");
                 }
                 else {
-                    AddToWatchList(selected_movie);
+                    if (!IsInWatchList(selected_movie.id)) {
+                        AddToWatchList(selected_movie);
+                        selected_movie.in_watch_list = true;
+                        // Update the movie in movie_list if it exists there
+                        auto it = std::find_if(movie_list.begin(), movie_list.end(),
+                            [&](const Movie& m) { return m.id == selected_movie.id; });
+                        if (it != movie_list.end()) {
+                            it->in_watch_list = true;
+                        }
+                    }
                     show_not_in_list_message = false;
                 }
             }
 
-            // Add this popup handling code
-            if (ImGui::BeginPopup("LoginRequiredPopup")) {
-                ImGui::Text("You need to log in to add movies to your watch list.");
-                static char username[256] = "";
-                ImGui::InputText("Username", username, IM_ARRAYSIZE(username));
-                if (ImGui::Button("Login") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                    if (UserLogin(username)) {
-                        AddToWatchList(selected_movie);
-                        ImGui::CloseCurrentPopup();
+            ImGui::SameLine();
+
+            if (ImGui::Button("Remove from Watch List")) {
+                if (current_selected_list != SelectedList::None && selected_movie_index != -1 && IsInWatchList(selected_movie.id)) {
+                    auto [removed, new_index] = RemoveFromWatchList(selected_movie.id);
+                    if (removed) {
+                        ImGui::OpenPopup("RemovedFromWatchList");
+
+                        // If we're viewing the watch list, update the selection
+                        if (current_selected_list == SelectedList::WatchList) {
+                            if (watch_list.empty()) {
+                                current_selected_list = SelectedList::None;
+                                selected_movie_index = -1;
+                                selected_movie = Movie();
+                                image_url.clear();
+                            }
+                            else {
+                                selected_movie_index = new_index;
+                                selected_movie = watch_list[selected_movie_index];
+                                image_url = selected_movie.poster_url;
+
+                                // Fetch detailed movie info for the newly selected movie
+                                fetch_in_progress.store(true);
+                                if (fetch_thread.joinable()) {
+                                    fetch_thread.join();
+                                }
+                                fetch_thread = std::thread(FetchMovieInfoThread, selected_movie, selected_movie_index);
+                            }
+                        }
+                        else {
+                            // If we're in the search results, just update the status
+                            selected_movie.in_watch_list = false;
+                        }
                     }
                     else {
-                        // Handle login failure
+                        ImGui::OpenPopup("RemoveFromWatchListFailed");
                     }
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("Continue without login")) {
+                else if (!IsInWatchList(selected_movie.id)) {
+                    ImGui::OpenPopup("MovieNotInWatchList");
+                }
+                else {
+                    ImGui::OpenPopup("NoMovieSelected");
+                }
+            }
+
+            // Popup for movie not in watch list
+            if (ImGui::BeginPopup("MovieNotInWatchList")) {
+                ImGui::Text("This movie is not in your watch list.");
+                if (ImGui::Button("OK")) {
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::EndPopup();
             }
 
-            ImGui::SameLine();
+            // Popup for successful removal
+            if (ImGui::BeginPopup("RemovedFromWatchList")) {
+                ImGui::Text("Movie successfully removed from your watch list.");
+                if (ImGui::Button("OK")) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
 
-            // Remove from watch list button
-            if (ImGui::Button("Remove from Watch List")) {
-                bool removed = RemoveFromWatchList(selected_movie.title);
-                show_not_in_list_message = !removed;
+            // Popup for failed removal
+            if (ImGui::BeginPopup("RemoveFromWatchListFailed")) {
+                ImGui::Text("Failed to remove movie from watch list. It may not be in the list.");
+                if (ImGui::Button("OK")) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            // Popup for no movie selected
+            if (ImGui::BeginPopup("NoMovieSelected")) {
+                ImGui::Text("Please select a movie first.");
+                if (ImGui::Button("OK")) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+
+            // Add this popup handling code
+            if (ImGui::BeginPopup("LoginRequiredPopup")) {
+                static char login_username[256] = "";
+                static bool reset_username = true;
+
+                if (reset_username) {
+                    memset(login_username, 0, sizeof(login_username));
+                    reset_username = false;
+                }
+
+                ImGui::Text("You need to log in to add movies to your watch list.");
+                ImGui::InputText("Username", login_username, IM_ARRAYSIZE(login_username));
+
+                ImGui::BeginDisabled(strlen(login_username) == 0);
+                if (ImGui::Button("Login") || (ImGui::IsKeyPressed(ImGuiKey_Enter) && strlen(login_username) > 0)) {
+                    if (UserLogin(login_username)) {
+                        AddToWatchList(selected_movie);
+                        reset_username = true;
+                        ImGui::CloseCurrentPopup();
+                    }
+                    else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Login failed. Please try again.");
+                    }
+                }
+                ImGui::EndDisabled();
+
+                ImGui::SameLine();
+                if (ImGui::Button("Continue without login")) {
+                    reset_username = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
+            else {
+                // Reset the username when the popup is not open
+                static bool reset_username = true;
+                reset_username = true;
             }
 
             // Messages for watch list status
             ImGui::BeginGroup();
-            bool in_watch_list = IsInWatchList(selected_movie.title);
-            if (in_watch_list) {
+            if (IsInWatchList(selected_movie.id)) {
                 ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Movie is in watch list");
             }
-            else if (show_not_in_list_message) {
-                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "The movie is not on watch list");
+            else {
+                ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight())); // This ensures consistent vertical spacing
+            }
+            bool in_watch_list = IsInWatchList(selected_movie.id);
+
+            // Debug information
+            ImGui::Text("Debug: Movie ID: %s, In Watch List: %s",
+                selected_movie.id.c_str(),
+                IsInWatchList(selected_movie.id) ? "Yes" : "No");
+
+            if (in_watch_list) {
+                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Movie is in watch list");
             }
             else {
                 ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight())); // This ensures consistent vertical spacing
             }
             ImGui::EndGroup();
         }
+
         else {
             ImGui::Text("Select a movie to see details");
         }
@@ -886,11 +1121,18 @@ int main() {
             search_in_progress.store(true);
             movie_queue.clear();
 
+            // Trim whitespace from title_input
+            std::string trimmed_title = title_input;
+            auto wsfront = std::find_if_not(trimmed_title.begin(), trimmed_title.end(), [](int c) { return std::isspace(c); });
+            auto wsback = std::find_if_not(trimmed_title.rbegin(), trimmed_title.rend(), [](int c) { return std::isspace(c); }).base();
+            trimmed_title = (wsback <= wsfront ? std::string() : std::string(wsfront, wsback));
+
             // Trigger fetching movie list based on title and use year as a filter
             fetcher_thread = std::thread([&]() {
                 FetchMovieList(title_input, year_input);
                 });
         }
+
 
         // Process movies from the queue
         if (search_in_progress.load()) {
@@ -941,10 +1183,10 @@ int main() {
         else if (!movie_list.empty()) {
             ImGui::Text("Search Results:");
             // Create a child window for the scrollable list
-            ImGui::BeginChild("MovieList", ImVec2(0, display_h * 0.3f), true);
-            if (ImGui::BeginTable("SearchResultsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable)) {
-                ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_DefaultSort);
-                ImGui::TableSetupColumn("Year", ImGuiTableColumnFlags_DefaultSort);
+            ImGui::BeginChild("SearchResults", ImVec2(0, display_h * 0.3f), true);
+            if (ImGui::BeginTable("SearchResultsTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch, 0.7f);
+                ImGui::TableSetupColumn("Year", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch, 0.3f);
                 ImGui::TableHeadersRow();
 
                 if (ImGui::TableGetSortSpecs()->SpecsDirty) {
@@ -964,22 +1206,55 @@ int main() {
                 for (int i = 0; i < movie_list.size(); ++i) {
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
-                    std::string selectable_label = movie_list[i].title + "##" + movie_list[i].id;
+                    std::string selectable_label = movie_list[i].title + "##" + std::to_string(i);
                     if (ImGui::Selectable(selectable_label.c_str(),
                         current_selected_list == SelectedList::SearchResults && selected_movie_index == i,
                         ImGuiSelectableFlags_SpanAllColumns)) {
-                        if (fetch_thread.joinable()) {
-                            fetch_thread.join();
-                        }
-                        first_run = false;
-                        selected_movie_index = i;
-                        current_selected_list = SelectedList::SearchResults;
-                        selected_movie = movie_list[i];
-                        image_url.clear();
-                        show_not_in_list_message = false;
-                        fetch_in_progress.store(true);
+                        try {
+                            first_run = false;
+                            selected_movie_index = i;
+                            current_selected_list = SelectedList::SearchResults;
+                            selected_movie = movie_list[i];
+                            image_url = selected_movie.poster_url;
+                            show_not_in_list_message = false;
 
-                        fetch_thread = std::thread(FetchMovieDetails, i);
+                            // Fetch detailed movie info when selected
+                            fetch_in_progress.store(true);
+                            if (fetch_thread.joinable()) {
+                                fetch_thread.join();
+                            }
+                            fetch_thread = std::thread([i]() {
+                                try {
+                                    Movie temp_movie = movie_list[i];
+                                    bool fetch_success = FetchMovieInfo(temp_movie);
+                                    if (fetch_success) {
+                                        std::lock_guard<std::mutex> lock(mtx);
+                                        movie_list[i] = temp_movie;
+                                        if (selected_movie_index == i && current_selected_list == SelectedList::SearchResults) {
+                                            selected_movie = temp_movie;
+                                            selected_movie.in_watch_list = IsInWatchList(selected_movie.id);
+                                            // Load the image if it's not already loaded
+                                            if (!selected_movie.poster_url.empty()) {
+                                                if (textureMap.find(selected_movie.poster_url) == textureMap.end()) {
+                                                    image_queue.push(selected_movie.poster_url);
+                                                    cv.notify_one();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else {
+                                        logError("Failed to fetch movie info for: " + temp_movie.title);
+                                    }
+                                }
+                                catch (const std::exception& e) {
+                                    logError("Exception in fetch thread: " + std::string(e.what()));
+                                }
+                                fetch_in_progress.store(false);
+                                });
+                        }
+                        catch (const std::exception& e) {
+                            logError("Exception in movie selection: " + std::string(e.what()));
+                        }
                     }
                     ImGui::TableSetColumnIndex(1);
                     ImGui::Text("%s", movie_list[i].release_year.c_str());
@@ -997,8 +1272,8 @@ int main() {
 
         // Watch List Display
         ImGui::SetCursorPos(ImVec2(10, ImGui::GetCursorPosY() + 10));
-        ImGui::PushFont(io.Fonts->Fonts[0]); 
-        ImGui::SetWindowFontScale(1.2f); 
+        ImGui::PushFont(io.Fonts->Fonts[0]);
+        ImGui::SetWindowFontScale(1.2f);
         ImGui::TextColored(ImVec4(0.7f, 0.3f, 0.7f, 1.0f), "My Watch List:");
         ImGui::SetWindowFontScale(1.0f);
         ImGui::PopFont();
@@ -1012,9 +1287,9 @@ int main() {
         else {
             // Create a child window for the scrollable watch list
             ImGui::BeginChild("WatchList", ImVec2(0, display_h * 0.3f), true);
-            if (ImGui::BeginTable("WatchListTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable)) {
-                ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_DefaultSort);
-                ImGui::TableSetupColumn("Year", ImGuiTableColumnFlags_DefaultSort);
+            if (ImGui::BeginTable("WatchListTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch, 0.7f);
+                ImGui::TableSetupColumn("Year", ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_WidthStretch, 0.3f);
                 ImGui::TableHeadersRow();
 
                 if (ImGui::TableGetSortSpecs()->SpecsDirty) {
@@ -1043,6 +1318,7 @@ int main() {
                         current_selected_list = SelectedList::WatchList;
                         selected_movie = watch_list[i];
                         image_url = selected_movie.poster_url;
+                        show_not_in_list_message = false;
 
                         // Fetch detailed movie info when selected
                         bool fetch_success = FetchMovieInfo(selected_movie);
@@ -1114,4 +1390,3 @@ int main() {
 
     return 0;
 }
-
