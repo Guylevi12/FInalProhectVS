@@ -92,12 +92,12 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;GLFW_INCLUDE_NONE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR;$(ProjectDir)include\OpenSSL\lib</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(ProjectDir)lib</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)include\OpenSSL\lib</AdditionalLibraryDirectories>
       <AdditionalDependencies>glfw3.lib;opengl32.lib;libssl.lib;libcrypto.lib;gdi32.lib;user32.lib;shell32.lib</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
     </Link>
@@ -110,14 +110,14 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;GLFW_INCLUDE_NONE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR;$(ProjectDir)include\OpenSSL\lib</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(ProjectDir)lib</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)include\OpenSSL\lib</AdditionalLibraryDirectories>
       <AdditionalDependencies>glfw3.lib;opengl32.lib;libssl.lib;libcrypto.lib;gdi32.lib;user32.lib;shell32.lib</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
     </Link>
@@ -128,13 +128,13 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;GLFW_INCLUDE_NONE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR;$(ProjectDir)include\OpenSSL\lib</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(ProjectDir)lib</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)include\OpenSSL\lib</AdditionalLibraryDirectories>
       <AdditionalDependencies>glfw3.lib;opengl32.lib;libssl.lib;libcrypto.lib;gdi32.lib;user32.lib;shell32.lib</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
     </Link>
@@ -147,7 +147,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;GLFW_INCLUDE_NONE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)src;$(ProjectDir)include;$(ProjectDir)include\GLAD;$(ProjectDir)include\GLFW;$(ProjectDir)include\ImGui;$(ProjectDir)include\httplib;$(ProjectDir)include\json;$(ProjectDir)include\OpenSSL;$(ProjectDir)include\stb;$(ProjectDir)include\KHR;$(ProjectDir)include\OpenSSL\lib</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
@@ -155,7 +155,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(ProjectDir)lib</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)lib;$(ProjectDir)include\OpenSSL\lib</AdditionalLibraryDirectories>
       <AdditionalDependencies>glfw3.lib;opengl32.lib;libssl.lib;libcrypto.lib;gdi32.lib;user32.lib;shell32.lib</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>MSVCRT</IgnoreSpecificDefaultLibraries>
     </Link>
