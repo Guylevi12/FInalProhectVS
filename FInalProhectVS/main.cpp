@@ -15,7 +15,6 @@
 #include <set>
 
 #include <fstream>
-#include <ctime>
 #include <filesystem>
 
 #include <glad/glad.h>
@@ -53,6 +52,7 @@ struct Movie {
     std::string votes;
     bool in_watch_list = false;
 };
+
 enum class ImageState {
     NotLoaded,
     Loading,
@@ -110,6 +110,9 @@ std::string api_key;
 // Functions:
 
 // General
+std::string GetExecutablePath() {
+    return fs::current_path().string();
+}
 void logError(const std::string& message) {
     std::ofstream logFile("error_log.txt", std::ios_base::app);
     if (logFile.is_open()) {
@@ -118,9 +121,6 @@ void logError(const std::string& message) {
         logFile << dt << ": " << message << std::endl;
         logFile.close();
     }
-}
-std::string GetExecutablePath() {
-    return fs::current_path().string();
 }
 int FilterNumericInput(ImGuiInputTextCallbackData* data)
 {
@@ -160,11 +160,8 @@ void ResetApplication() {
     memset(title_input, 0, sizeof(title_input));
     memset(year_input, 0, sizeof(year_input));
     show_not_in_list_message = false;
-
-    // Clear the image queue
     std::queue<std::string> empty;
     std::swap(image_queue, empty);
-
 }
 
 // Movie
@@ -284,7 +281,7 @@ bool FetchMovieInfo(Movie& movie) { // info of a spesific movie
     connection_error = false;
     return false;
 }
-void FetchMovieInfoThread(const Movie& movie, int index) {
+void FetchMovieInfoThread(const Movie& movie, int index) { // when removing a movie from watch list, fetches the next one
     Movie temp_movie = movie;
     bool fetch_success = FetchMovieInfo(temp_movie);
     if (fetch_success) {
@@ -306,7 +303,7 @@ void FetchMovieInfoThread(const Movie& movie, int index) {
     }
     fetch_in_progress.store(false);
 }
-void FetchMovieDetails(int index) {
+void FetchMovieDetails(int index) { // fetches imformation about the movies from cur movie  list
     Movie temp_movie = movie_list[index];
     bool fetch_success = FetchMovieInfo(temp_movie);
     if (fetch_success) {
@@ -926,8 +923,8 @@ int main() {
             float image_width = 200;
             float image_height = 300;
             DisplayMoviePoster(selected_movie.poster_url, image_width, image_height);
-
             ImGui::Spacing();
+
             // Add to watch list button
             if (ImGui::Button("Add to Watch List")) {
                 first_run = false;
@@ -1078,7 +1075,7 @@ int main() {
                 ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Movie is in watch list");
             }
             else {
-                ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight())); // This ensures consistent vertical spacing
+                ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight()));
             }
             ImGui::EndGroup();
             ImGui::EndChild(); // MovieDetailsLayout
@@ -1120,19 +1117,12 @@ int main() {
             selected_movie_index = -1;
             search_in_progress.store(true);
             movie_queue.clear();
-
-            // Trim whitespace from title_input
-            std::string trimmed_title = title_input;
-            auto wsfront = std::find_if_not(trimmed_title.begin(), trimmed_title.end(), [](int c) { return std::isspace(c); });
-            auto wsback = std::find_if_not(trimmed_title.rbegin(), trimmed_title.rend(), [](int c) { return std::isspace(c); }).base();
-            trimmed_title = (wsback <= wsfront ? std::string() : std::string(wsfront, wsback));
-
+          
             // Trigger fetching movie list based on title and use year as a filter
             fetcher_thread = std::thread([&]() {
                 FetchMovieList(title_input, year_input);
                 });
         }
-
 
         // Process movies from the queue
         if (search_in_progress.load()) {
