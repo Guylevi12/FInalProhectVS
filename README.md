@@ -1,6 +1,12 @@
 ## Description
 This application is a graphical user interface (GUI) program that allows users to search for movie information, view details about selected movies, and maintain a personal watch list. It uses the OMDb API to fetch movie data and displays it in an interactive interface.
 
+## Necessary
+- after first download insert:
+- PATH=$(ProjectDir)include\OpenSSL\bin;%PATH%
+- inside Configuration properties/Debugging/Environment
+- make sure that All Configurations is selected in Configuration as well as All Platforms in Platform
+
 ## Features
 - Search for movies by title and optionally by year
 - View detailed information about selected movies, including:
