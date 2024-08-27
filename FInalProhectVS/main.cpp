@@ -53,12 +53,20 @@ struct Movie {
     std::string votes;
     bool in_watch_list = false;
 };
+enum class ImageState {
+    NotLoaded,
+    Loading,
+    Loaded,
+    Error
+};
+
 struct ImageData {
     unsigned char* data = nullptr;
     int width = 0;
     int height = 0;
     int channels = 0;
     GLuint texture_id = 0;
+    ImageState state = ImageState::NotLoaded;
 };
 
 // Global variables of the project:
@@ -298,7 +306,6 @@ void FetchMovieInfoThread(const Movie& movie, int index) {
     }
     fetch_in_progress.store(false);
 }
-
 void FetchMovieDetails(int index) {
     Movie temp_movie = movie_list[index];
     bool fetch_success = FetchMovieInfo(temp_movie);
@@ -343,6 +350,10 @@ void CreateTexture(const std::string& url) {
             GLenum error = glGetError();
             if (error != GL_NO_ERROR) {
                 std::cerr << "OpenGL error in CreateTexture: " << error << std::endl;
+                imageData.state = ImageState::Error;
+            }
+            else {
+                imageData.state = ImageState::Loaded;
             }
 
             glBindTexture(GL_TEXTURE_2D, 0);
@@ -356,8 +367,9 @@ void EnsureImageLoaded(const std::string& url) {
 
     std::lock_guard<std::mutex> lock(mtx);
     auto it = textureMap.find(url);
-    if (it == textureMap.end() || (it->second.data == nullptr && it->second.texture_id == 0)) {
+    if (it == textureMap.end() || it->second.state == ImageState::NotLoaded) {
         // Image not loaded, start loading
+        textureMap[url] = { nullptr, 0, 0, 0, 0, ImageState::Loading };
         image_queue.push(url);
         cv.notify_one();
     }
@@ -367,19 +379,29 @@ void DisplayMoviePoster(const std::string& poster_url, float image_width, float 
         EnsureImageLoaded(poster_url);
         auto it = textureMap.find(poster_url);
         if (it != textureMap.end()) {
-            if (it->second.texture_id != 0) {
-                ImGui::Image((void*)(intptr_t)it->second.texture_id, ImVec2(image_width, image_height));
-            }
-            else if (it->second.data != nullptr) {
-                ImGui::Text("Creating texture...");
-                CreateTexture(poster_url);
-            }
-            else {
+            switch (it->second.state) {
+            case ImageState::Loaded:
+                if (it->second.texture_id != 0) {
+                    ImGui::Image((void*)(intptr_t)it->second.texture_id, ImVec2(image_width, image_height));
+                }
+                else {
+                    ImGui::Text("Texture not created yet");
+                    CreateTexture(poster_url);
+                }
+                break;
+            case ImageState::Loading:
                 ImGui::Text("Loading image...");
+                break;
+            case ImageState::Error:
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed to load image");
+                break;
+            case ImageState::NotLoaded:
+                ImGui::Text("Image not loaded");
+                break;
             }
         }
         else {
-            ImGui::Text("Loading image...");
+            ImGui::Text("Image not found in texture map");
         }
     }
     else {
@@ -434,19 +456,19 @@ void LoadImageFromUrl(const std::string& url) {
 
         if (data) {
             std::unique_lock<std::mutex> lock(mtx);
-            textureMap[url] = { data, width, height, channels, 0 };
+            textureMap[url] = { data, width, height, channels, 0, ImageState::Loaded };
             glfwPostEmptyEvent();
         }
         else {
             std::cerr << "Failed to decode image data for URL: " << url << ". STB Error: " << stbi_failure_reason() << std::endl;
             std::lock_guard<std::mutex> lock(mtx);
-            textureMap[url] = { nullptr, 0, 0, 0, 0 };  // Dummy entry to prevent future loading attempts
+            textureMap[url] = { nullptr, 0, 0, 0, 0, ImageState::Error };
         }
     }
     else {
         std::cerr << "Failed to download image from URL: " << url << ". Status: " << (res ? res->status : 0) << std::endl;
         std::lock_guard<std::mutex> lock(mtx);
-        textureMap[url] = { nullptr, 0, 0, 0, 0 };  // Dummy entry to prevent future loading attempts
+        textureMap[url] = { nullptr, 0, 0, 0, 0, ImageState::Error };
     }
 }
 void ImageLoadingThread() {
@@ -743,10 +765,10 @@ int main() {
 
         // Display "Hello username" at the top of the screen in the middle, above the table lines
         if (!current_user.empty()) {
-            ImFont* specialFont48 = io.Fonts->Fonts[2]; // Assuming this is your largest font
+            ImFont* specialFont48 = io.Fonts->Fonts[2]; 
             ImGui::PushFont(specialFont48);
 
-            ImGui::SetCursorPos(ImVec2(0, 20)); // Moved up slightly to accommodate larger text
+            ImGui::SetCursorPos(ImVec2(0, 20)); 
             ImGui::BeginGroup();
             ImGui::Dummy(ImVec2(display_w, 0.0f));
 
@@ -847,9 +869,6 @@ int main() {
 
             ImGui::PopFont();
 
-            // Image below the text
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 20);  // Add some space between text and image
-
             // Calculate the aspect ratio of the image
             float aspect_ratio = 1.0f;  // Assuming the image is square
             float image_width = column_width * 0.5f;  // Use 80% of the column width
@@ -873,12 +892,10 @@ int main() {
         }
 
         // Display movie details
-        if (current_selected_list != SelectedList::None && selected_movie_index != -1) {
-            // Create a fixed layout
+        if (selected_movie_index != -1) {
             ImGui::BeginChild("MovieDetailsLayout", ImVec2(0, -1), false, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
 
-            // Left side: Text information
-            ImGui::BeginChild("MovieInfo", ImVec2(ImGui::GetWindowWidth() * 0.6f, -1), false);
+            // Movie Information
             if (fetch_in_progress.load()) {
                 ImGui::Text("Fetching movie details...");
             }
@@ -902,18 +919,15 @@ int main() {
                     }
                 }
             }
-            ImGui::EndChild();
-
-            // Right side: Image
-            ImGui::SameLine();
-            ImGui::BeginChild("MoviePoster", ImVec2(-1, -1), false);
+          
+            ImGui::Spacing();
+     
+           // Movie Poster
             float image_width = 200;
             float image_height = 300;
             DisplayMoviePoster(selected_movie.poster_url, image_width, image_height);
-            ImGui::EndChild(); // MoviePoster
 
-            ImGui::EndChild(); // MovieDetailsLayout
-
+            ImGui::Spacing();
             // Add to watch list button
             if (ImGui::Button("Add to Watch List")) {
                 first_run = false;
@@ -1056,21 +1070,10 @@ int main() {
                 reset_username = true;
             }
 
+
             // Messages for watch list status
             ImGui::BeginGroup();
-            if (IsInWatchList(selected_movie.id)) {
-                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Movie is in watch list");
-            }
-            else {
-                ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight())); // This ensures consistent vertical spacing
-            }
-            bool in_watch_list = IsInWatchList(selected_movie.id);
-
-            // Debug information
-            ImGui::Text("Debug: Movie ID: %s, In Watch List: %s",
-                selected_movie.id.c_str(),
-                IsInWatchList(selected_movie.id) ? "Yes" : "No");
-
+            bool in_watch_list = IsInWatchList(selected_movie.id);       
             if (in_watch_list) {
                 ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Movie is in watch list");
             }
@@ -1078,13 +1081,10 @@ int main() {
                 ImGui::Dummy(ImVec2(0, ImGui::GetTextLineHeight())); // This ensures consistent vertical spacing
             }
             ImGui::EndGroup();
+            ImGui::EndChild(); // MovieDetailsLayout
         }
 
-        else {
-            ImGui::Text("Select a movie to see details");
-        }
         ImGui::EndChild();
-
         ImGui::NextColumn();
 
         // Right column: Search and movie list

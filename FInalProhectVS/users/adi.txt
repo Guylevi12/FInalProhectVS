@@ -1,5 +1,3 @@
-tt0307461|Shrek in the Swamp Karaoke Dance Party|2001
-tt0360985|Shrek 4-D|2003
-tt0298148|Shrek 2|2004
 tt1201607|Harry Potter and the Deathly Hallows: Part 2|2011
 tt0295297|Harry Potter and the Chamber of Secrets|2002
+tt1099212|Twilight|2008
